@@ -34,15 +34,16 @@ when defined(velcroOwned):
   proc hash*(x: VelcroObj): int =
     hash(cast[pointer](x))
   when defined(debug):
-    proc echoVelDB*(): string = velDB.dbToString()
+    proc stringVelDB*(): string = velDB.dbToString()
 
+# More utilities
 func typeId*(T: typedesc): int =
   const id = nextTypeId.value
   static:
     inc nextTypeId
   return id
 proc initVelcro*(): VelcroObj = VelcroObj(comps: initTable[int, VelcroComp]())
-proc compsOf[T](obj: T): var Table[int, VelcroComp] =
+proc compsOf[T](obj: T): var Table[int, VelcroComp] {.warning[UnreachableCode]:off.} =
   when defined(velcroOwned):
     when T is VelcroHandler:
       return velDB.base[cast[VelcroHandler](obj).index].comps
@@ -68,19 +69,19 @@ else:
 proc validVelcro[T, C](obj: T, comp: C) =
   validComp(comp); validObj(obj)
 
+# The base attach without checks
 proc baseAdd[T, C](obj: var T, comp: C) {.inline.} =
-  echo compsOf(obj)
   compsOf(obj)[typeId(C)] = cast[VelcroComp](comp)
-  echo compsOf(obj)
+# Attaching, checking, detaching, indexing
 proc add*[T, C](obj: var T, comp: C) =
   validVelcro(obj, comp)
   baseAdd(obj, comp)
   when defined(velcroOwned):
     when T is VelcroObj:
       if velDB.index.hasKey(obj):
-        velDB.tags[typeId(C)].incl velDB.index[obj]
+        velDB.tags.mgetOrPut(typeId(C), initHashSet[T]()).incl velDB.index[obj]
     elif T is VelcroHandler:
-      velDB.tags[typeId(C)].incl obj
+      velDB.tags.mgetOrPut(typeId(C), initHashSet[T]()).incl obj
 proc has*[T, C](obj: T, comp: typedesc[C]): bool =
   validObj(obj)
   compsOf(obj).hasKey(typeId(C))
@@ -88,7 +89,7 @@ proc delete*[T, C](obj: var T, comp: typedesc[C]) =
   validObj(obj)
   if not obj.has(C):
     raise newException(IndexDefect, "Velcro does not have '" & $C & "' component")
-  compsOf(obj).delete(typeId(C))
+  compsOf(obj).del(typeId(C))
   when defined(velcroOwned):
     when T is VelcroObj:
       if velDB.index.hasKey(obj):
@@ -102,8 +103,10 @@ proc `[]`*[T, C](obj: T, comp: typedesc[C]): C =
   cast[C](compsOf(obj)[typeId(C)])
 
 when defined(velcroOwned):
+  # Helper function
   proc toSeq*(set: HashSet[VelcroHandler]): seq[VelcroHandler] =
     for item in set: result.add item
+  # Uploading
   proc rawUpload[T](obj: T): VelcroHandler {.inline.} =
     velDB.base.add cast[VelcroObj](obj)
     let handler = VelcroHandler(index: velDB.base.len - 1)
@@ -116,17 +119,17 @@ when defined(velcroOwned):
       if not velDB.tags.hasKey(key):
         velDB.tags[key] = initHashSet[VelcroHandler](64)
       velDB.tags[key].incl index
+  # Querying
   proc querySet*[T](query: typedesc[T]): HashSet[VelcroHandler] =
     let key = typeId(query)
     if not velDB.tags.hasKey(key):
-      echo dbToString(velDB)
       return initHashSet[VelcroHandler](0)
       #raise newException(IndexDefect, "'" & $query & "' component does not exist in database")
     velDB.tags[key]
   proc query*[T](query: typedesc[T]): seq[VelcroHandler] =
     let key = typeId(query)
     if not velDB.tags.hasKey(key):
-      return initHashSet[VelcroHandler](0)
+      return @[]
       #raise newException(IndexDefect, "'" & $query & "' component does not exist in database")
     toSeq(velDB.tags[key])
   macro querySet*(args: varargs[untyped]): untyped =
@@ -135,18 +138,19 @@ when defined(velcroOwned):
     if args.len == 1:
       result = newCall(bindSym"querySet", args[0])
     else:
-      result = newStmtList()
-      result.add newVarStmt(
-        ident"result",
+      var blck = newStmtList()
+      blck.add newVarStmt(
+        ident"tmp",
         newCall(bindSym"querySet", args[0])
       )
       for i in 1 ..< args.len:
-        result.add newAssignment(
-          ident"result",
-          infix(ident"result", "*", newCall(bindSym"querySet", args[i]))
+        blck.add newAssignment(
+          ident"tmp",
+          infix(ident"tmp", "*", newCall(bindSym"querySet", args[i]))
         )
-      result.add ident"result"
-  proc querySetAny*(args: varargs[untyped]): untyped =
+      blck.add ident"tmp"
+      result = newTree(nnkBlockStmt, newEmptyNode(), blck)
+  macro querySetAny*(args: varargs[untyped]): untyped =
     if args.len == 0:
       error("querySet requires at least one type argument")
     if args.len == 1:
@@ -154,12 +158,16 @@ when defined(velcroOwned):
     else:
       result = newStmtList()
       result.add newVarStmt(
-        ident"result",
+        ident"tmp",
         newCall(bindSym"querySet", args[0])
       )
       for i in 1 ..< args.len:
         result.add newAssignment(
-          ident"result",
-          infix(ident"result", "+", newCall(bindSym"querySet", args[i]))
+          ident"tmp",
+          infix(ident"tmp", "+", newCall(bindSym"querySet", args[i]))
         )
-      result.add ident"result"
+      result.add ident"tmp"
+  # Extra
+  proc `[]`[T](vh: VelcroHandler, obj: typedesc[T]): T =
+    validObj(obj)
+    cast[T](velDB.base[vh.index])
