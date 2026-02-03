@@ -1,5 +1,5 @@
-version       = "0.1.0"
+version       = "0.1.1"
 author        = "Bodnár Peter"
-description   = "Example Text"
+description   = "Velcro is a lightweight Nim ECS library for runtime-attached components."
 license       = "MIT"
 srcDir        = "src"
